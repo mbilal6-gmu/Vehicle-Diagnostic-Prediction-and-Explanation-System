@@ -1,0 +1,34 @@
+# Python
+venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+
+# Environment
+.env
+
+# Large data files (not suitable for git)
+Data/Toyota_Final_Current.xlsx
+Data/Toyota_RAG_Data.csv.xls
+Data/Toyota_RAG_Data.json
+Data/processed/
+Data/nhtsa/
+
+# Trained model binaries
+models/*.pkl
+
+# Vector store (large binary index)
+vectorstore/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/

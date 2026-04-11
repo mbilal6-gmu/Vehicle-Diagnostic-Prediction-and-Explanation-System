@@ -1,0 +1,29 @@
+{
+  "ml": {
+    "risk_rmse": 0.0097811359653493,
+    "risk_mae": 0.005516478232122027,
+    "risk_r2": 0.9934597472668696,
+    "cel_accuracy": 1.0,
+    "cel_f1": 0.0,
+    "cel_auc": NaN
+  },
+  "rag": {
+    "rag_precision_at_1": 1.0,
+    "rag_probe_n": 20
+  },
+  "llm": {
+    "mean_faithfulness": 0.765,
+    "min_faithfulness": 0.0,
+    "mean_latency_s": 2.2727205753326416,
+    "max_latency_s": 3.3220677375793457,
+    "cases_evaluated": 20,
+    "cases_succeeded": 20,
+    "cases_failed": 0,
+    "cases_passed_gate": 16
+  },
+  "notes": {
+    "label_origin": "LLM-generated from real sensor data (not ground-truth OBD scan)",
+    "test_split": "20% stratified by vehicle_model",
+    "golden_n": 200
+  }
+}
