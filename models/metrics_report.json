@@ -1,0 +1,13 @@
+{
+  "failure_risk_regressor": {
+    "rmse": 0.010052627816007232,
+    "mae": 0.005729226592357736,
+    "r2": 0.9933024355068817
+  },
+  "check_engine_classifier": {
+    "accuracy": 0.99875,
+    "f1": 0.0,
+    "auc": 0.9892921707690169
+  },
+  "label_note": "Targets are LLM-generated from real sensor data. Metrics reflect model-to-model reproduction fidelity, not ground-truth OBD accuracy."
+}
