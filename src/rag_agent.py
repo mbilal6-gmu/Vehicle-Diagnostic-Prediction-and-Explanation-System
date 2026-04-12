@@ -151,6 +151,7 @@ def retrieve(
             "description": meta.get("description", ""),
             "source":      meta.get("source", ""),
             "source_url":  meta.get("source_url", ""),
+            "image_keys":  meta.get("image_keys", ""),
             "combined_score": round(combined, 4),
         })
 

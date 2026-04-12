@@ -35,3 +35,8 @@ scipy==1.13.1
 python-dotenv==1.0.1
 joblib==1.4.2
 tqdm==4.66.5
+
+# LEMON database extraction (one-time, run in WSL only)
+# Requires libmtbl-dev system library:  sudo apt-get install -y libmtbl-dev
+# Then:  pip install pymtbl
+# pymtbl   ← not pinned; install manually in WSL before running extract_lemon.py

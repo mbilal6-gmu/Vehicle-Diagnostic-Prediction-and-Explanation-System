@@ -18,14 +18,16 @@ import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.rag_agent  import retrieve
 from src.llm_judge  import generate_report, generate_candidates, update_candidates
 
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
-DATA_DIR  = os.path.join(os.path.dirname(__file__), "..", "Data", "processed")
+MODEL_DIR   = os.path.join(os.path.dirname(__file__), "..", "models")
+DATA_DIR    = os.path.join(os.path.dirname(__file__), "..", "Data", "processed")
+LEMON_IMGS  = Path(os.path.dirname(__file__)) / ".." / "Data" / "lemon" / "images"
 
 VEHICLE_MODELS = [
     "corolla", "camry", "rav4", "highlander",
@@ -365,6 +367,56 @@ def sensor_tab(vehicle_model: str, vehicle_year: int, engine_code: str):
 
 
 # --------------------------------------------------------------------------- #
+# LEMON reference diagram display
+# --------------------------------------------------------------------------- #
+def _render_reference_diagrams(chunks: list[dict]):
+    """
+    Show wiring diagrams / component photos from the LEMON manual database.
+    Only appears when retrieved chunks include LEMON pages that have images.
+    Images are pre-extracted PNG files in Data/lemon/images/ by extract_lemon.py.
+    """
+    # Collect unique image filenames from all retrieved LEMON chunks
+    image_files: list[Path] = []
+    seen: set[str] = set()
+
+    for chunk in chunks:
+        if chunk.get("source") != "LEMON Vehicle Manual Database":
+            continue
+        raw_keys = chunk.get("image_keys", "")
+        if not raw_keys:
+            continue
+        for fname in raw_keys.split(","):
+            fname = fname.strip()
+            if not fname or fname in seen:
+                continue
+            img_path = LEMON_IMGS / fname
+            if img_path.exists():
+                image_files.append(img_path)
+                seen.add(fname)
+
+    if not image_files:
+        return   # no LEMON images — skip expander entirely
+
+    with st.expander(f"📷 Reference Diagrams ({len(image_files)} image{'s' if len(image_files) != 1 else ''} from LEMON manuals)"):
+        st.caption("Wiring diagrams and component photos from the vehicle service manual.")
+        # Display in rows of 3
+        cols_per_row = 3
+        for row_start in range(0, len(image_files), cols_per_row):
+            row_imgs = image_files[row_start : row_start + cols_per_row]
+            cols = st.columns(len(row_imgs))
+            for col, img_path in zip(cols, row_imgs):
+                with col:
+                    try:
+                        st.image(
+                            str(img_path),
+                            caption=img_path.stem,
+                            use_column_width=True,
+                        )
+                    except Exception:
+                        st.caption(f"⚠️ Could not load {img_path.name}")
+
+
+# --------------------------------------------------------------------------- #
 # Shared report renderer
 # --------------------------------------------------------------------------- #
 def _render_full_report(report: dict, chunks: list[dict], latency: float):
@@ -408,6 +460,9 @@ def _render_full_report(report: dict, chunks: list[dict], latency: float):
 
     with st.expander("🛠️ Raw JSON Report"):
         st.json({k: v for k, v in report.items() if k != "raw_text"})
+
+    # ── Reference Diagrams (LEMON images) ─────────────────────────────────── #
+    _render_reference_diagrams(chunks)
 
     st.caption(
         "⚠️ **Disclaimer:** For educational and diagnostic assistance only. "

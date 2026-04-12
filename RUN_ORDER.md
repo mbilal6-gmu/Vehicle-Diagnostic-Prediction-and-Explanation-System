@@ -23,6 +23,19 @@ python src/fetch_nhtsa.py
 ```
 Outputs: `Data/nhtsa/nhtsa_complaints.csv`
 
+## 4b. (Optional) Extract LEMON repair manuals — run in WSL
+Adds real repair procedures and wiring diagrams for 7,063 Toyota vehicles.
+Requires the LEMON database at `X:\lemon-manuals\lemon`.
+
+```bash
+# In WSL terminal:
+sudo apt-get install -y libmtbl-dev
+pip install pymtbl
+python src/extract_lemon.py --lemon-path "/mnt/x/lemon-manuals/lemon"
+```
+Outputs: `Data/lemon/toyota_pages.jsonl` + `Data/lemon/images/*.png`
+Then run step 5 as normal — build_vectorstore.py picks up the JSONL automatically.
+
 ## 5. Build the vector store
 ```
 python src/build_vectorstore.py
