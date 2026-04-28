@@ -3,6 +3,22 @@
 **George Mason University — AI Design and Deployment Risks | Spring 2026**
 **Team:** Cain & Muhammad | **Mode:** Implementation-Heavy
 
+## Notes to Evaluator
+
+```README.md``` (This document) -> Full system architecture + metrics
+
+```/evidence/architecture_diagram.png``` -> Full system architecture diagram
+
+```/evidence``` -> System artifacts
+
+```tests/metrics_report.json``` -> Benchmark test results
+
+```tests/test_harness.py``` -> Validation & reproducability unit test suite
+
+```Final Project Presentation``` -> https://docs.google.com/presentation/d/1m6z-aUPFaOcFb8xLA7sW5ZBIRYfgAuvkiKnVCtmf0OU/edit?usp=sharing 
+
+```Final Project Video``` -> https://youtu.be/RGdnAwFuSNw 
+
 ---
 
 ## Quick Start (Pre-built Release)
@@ -23,7 +39,7 @@ python -m venv venv
 pip install -r requirements.txt
 
 # 4. Configure LLM (choose one — see LLM Options below)
-cp .env .env.backup              # .env is included in the release zip
+#    Copy .env from the release zip, then fill in OPENAI_API_KEY or leave blank for Ollama
 
 # 5. Run
 streamlit run app/streamlit_app.py
@@ -31,33 +47,36 @@ streamlit run app/streamlit_app.py
 
 The app opens at `http://localhost:8501`. The sidebar shows live system status: Risk Model ✅ · Vector Store ✅ · LLM ✅/🟡/❌.
 
----
-
-## LLM Options
+### LLM Options
 
 | Option | Speed | Cost | Setup |
 |---|---|---|---|
 | **OpenAI GPT-4o** (recommended) | ~2–5s | Pay-per-use | Add `OPENAI_API_KEY=sk-...` to `.env` |
 | **DeepSeek-R1:7b via Ollama** | ~90–130s | Free / offline | See instructions below |
 
-### Running without an OpenAI key (DeepSeek via Ollama)
-
-```bash
-# 1. Install Ollama from https://ollama.com/download
-# 2. Pull the model (one-time, ~4 GB download)
-ollama pull deepseek-r1:7b
-# 3. Keep this running in a separate terminal
-ollama serve
-# 4. Leave OPENAI_API_KEY blank in .env — the app detects Ollama automatically
-```
-
-The app sidebar shows `🟡 DeepSeek (Ollama) — slower, ~90–130s` when Ollama is active. If neither LLM is configured the sidebar displays step-by-step setup instructions inline.
-
 ---
 
 ## Problem
 
 Modern vehicles generate rich ECU sensor data and fault codes, but interpreting them requires specialist knowledge most owners don't have. Basic OBD readers surface a code with no explanation, no urgency rating, and no recommended action. This system combines a predictive ML model, a validated knowledge base, and a hallucination-controlled LLM to give any user a plain-English, traceable diagnostic report.
+
+---
+
+## System Boundary
+In scope:
+- Toyota diagnostics (2020)
+- OBD sensor risk prediction
+- DTC retrieval + explanation
+- Faithfulness-controlled LLM reporting
+- Recommended repair actions
+
+Out of scope:
+- Repair execution
+- Non-Toyota manufacturers
+- Real mechanic certification
+
+## Human Review Points
+- LLM outputs blocked if faithfulness < 70%, information sent to mechanic for human review
 
 ---
 
@@ -71,7 +90,7 @@ User Input (two modes)
               ↓
      RAG Retrieval Layer
      Hybrid BM25 + ChromaDB Vector Search
-     (49,618 chunks from 4 knowledge sources)
+     (~88,000 chunks from 3 knowledge sources)
 
               ↓
      LLM Reasoning (GPT-4o)
@@ -98,7 +117,7 @@ See [`evidence/architecture_diagram.png`](evidence/architecture_diagram.png) for
 | Dataset | Source | Type | Records |
 |---|---|---|---|
 | `Toyota_Final_Current.xlsx` | Synthetic OBD-II patterns | ML training | 12,000 rows × 30 cols |
-| `Toyota_RAG_Data.json` | toyota-club.net (scraped) | RAG knowledge base | 12,978 DTC records |
+| `Toyota_RAG_Data.csv` | toyota-club.net (scraped) | RAG knowledge base | 12,978 DTC records |
 | `toyota_pages.jsonl` | LEMON Vehicle Manual Database (local) | RAG — repair procedures | ~74,950 chunks |
 | `toyota.json` | Libre Automotive Diagnostic (AGPL) | RAG supplement | 42 P1xxx Toyota codes |
 | `dtc_db.json` | Libre Automotive Diagnostic (AGPL) | RAG supplement | 39 SAE OBD-II codes |
@@ -123,22 +142,61 @@ See [`evidence/architecture_diagram.png`](evidence/architecture_diagram.png) for
 
 ---
 
-## Setup & Run (Build From Scratch)
+## Release Gates
+- RMSE ≤ 0.05
+- R² ≥ 0.90
+- Precision@1 ≥ 90%
+- LLM Faithfulness ≥ 0.70
+- Latency < 10s
 
-Use this path only if you want to re-train, re-scrape, or regenerate the vectorstore. Otherwise use the [Quick Start](#quick-start-pre-built-release) above.
+---
+
+## Monitoring
+- Automated test harness
+- Bias checks across vehicle models
+- Faithfulness gate logs
+- Error/failure logging
+
+---
+
+## Validation Methodology
+- Unit tests: preprocessing + model outputs
+- Integration tests: end-to-end ML + RAG + LLM
+- Scenario testing: real + synthetic DTC cases
+- Red-team checks: low-context / hallucination scenarios
+- Benchmark comparisons: metrics vs release targets
+
+---
+
+## Setup & Run
 
 ### Prerequisites
 - Python 3.9+
-- OpenAI API key or Ollama with DeepSeek-R1:7b
-- LEMON database server on `http://127.0.0.1:8080` (for re-scraping only)
+- **LLM — choose one:**
+  - OpenAI API key (fast, ~2–5s per report) — add to `.env` as `OPENAI_API_KEY=sk-...`
+  - OR Ollama + DeepSeek-R1:7b (free, offline, ~90–130s per report) — see below
+- LEMON database server running on `http://127.0.0.1:8080` (for re-scraping only — not needed if using the pre-built release)
+
+### Running without an OpenAI API key (DeepSeek via Ollama)
+
+```bash
+# 1. Install Ollama from https://ollama.com/download
+# 2. Pull the model (one-time, ~4 GB download)
+ollama pull deepseek-r1:7b
+# 3. Start the Ollama server (keep this terminal open)
+ollama serve
+# 4. Leave OPENAI_API_KEY blank in .env — the app detects Ollama automatically
+```
+
+The app sidebar shows which LLM is active (✅ OpenAI / 🟡 DeepSeek / ❌ None).
 
 ### Installation
 
 ```bash
 python -m venv venv
-.\venv\Scripts\Activate.ps1      # Windows PowerShell
+.\venv\Scripts\Activate.ps1      # Windows
 pip install -r requirements.txt
-cp .env.example .env             # fill in OPENAI_API_KEY or leave blank for Ollama
+cp .env.example .env             # Add your OPENAI_API_KEY
 ```
 
 ### Run Order
@@ -147,10 +205,10 @@ cp .env.example .env             # fill in OPENAI_API_KEY or leave blank for Oll
 # 1. Preprocess training data
 python src/preprocess.py
 
-# 2. Scrape LEMON repair manual (requires lemon-website.exe running on port 8080)
+# 2. Scrape LEMON repair manual (requires lemon-website.exe running)
 python src/scrape_lemon.py
 
-# 3. Build the vector store (~2 min, downloads embedding model once)
+# 3. Build the vector store (takes ~2 min, downloads embedding model once)
 python src/build_vectorstore.py
 
 # 4. Train ML models
@@ -174,6 +232,7 @@ python evidence/generate_evidence.py
 
 ---
 
+
 ## Validation Results
 
 | Metric | Target | Result | Evidence |
@@ -191,23 +250,21 @@ Full results: `tests/metrics_report.json` | Per-row breakdown: `tests/evaluation
 
 **CEL note:** CEL F1 = 0 due to extreme class imbalance in the synthetic dataset (all test rows are negative). AUC=0.9893 confirms the model correctly orders risk; the UI uses `risk_score > 0.5` as the CEL heuristic.
 
----
-
 ## Evidence Folder
 
 ```
 evidence/
-├── architecture_diagram.png       Full system pipeline — data flow + two control points
-├── rag_retrieval_quality.png      Hybrid scoring pipeline + observed chunk scores (P0300 query)
-├── ml_performance.png             Predicted vs actual risk scatter + residual histogram (n=200)
+├── architecture_diagram.png     Full system pipeline — data flow + two control points
+├── rag_retrieval_quality.png    Hybrid scoring pipeline + observed chunk scores (P0300 query)
+├── ml_performance.png           Predicted vs actual risk scatter + residual histogram (n=200)
 ├── faithfulness_distribution.png  LLM faithfulness gate — per-case bars + pass/fail pie
-├── vectorstore_stats.png          Knowledge-base source breakdown (49,618 total chunks)
-├── hallucination_control.png      DTC description correction & suspect-candidate filter flow
-├── shap_summary_plot.png          Top-15 feature importances (bar chart)
-├── shap_beeswarm.png              SHAP value distribution by feature
-├── bias_by_model.png              Risk score distribution across 10 vehicle models (ANOVA)
-├── bias_check_report.json         ANOVA F-stat, p-value, per-model CI95 (machine-readable)
-└── generate_evidence.py           Reproducible script — re-runs all chart generation
+├── vectorstore_stats.png        Knowledge-base source breakdown (~88k total chunks)
+├── hallucination_control.png    DTC description correction & suspect-candidate filter flow
+├── shap_summary_plot.png        Top-15 feature importances (bar chart)
+├── shap_beeswarm.png            SHAP value distribution by feature
+├── bias_by_model.png            Risk score distribution across 10 vehicle models (ANOVA)
+├── bias_check_report.json       ANOVA F-stat, p-value, per-model CI95 (machine-readable)
+└── generate_evidence.py         Reproducible script — re-runs all chart generation
 ```
 
 ---
@@ -225,6 +282,21 @@ evidence/
 
 ---
 
+## Trade-offs
+- Synthetic labels improve coverage but reduce ground-truth certainty
+- Toyota-only scope improves realism but limits generalizability
+- LLM reasoning improves explanation but increases latency
+
+--- 
+
+## Next Steps
+- Expand manufacturers
+- Add real OBD scan datasets
+- Add repair manuals
+- Mobile deployment
+
+--- 
+
 ## Disclaimer
 
 This system is for **educational and diagnostic assistance only**. Always have a certified Toyota technician verify any diagnosis before performing repairs. The authors assume no liability for decisions made based on this system's outputs.
@@ -234,11 +306,11 @@ This system is for **educational and diagnostic assistance only**. Always have a
 ## Repository Structure
 
 ```
-Vehicle-Diagnostic-Prediction-and-Explanation-System/
+AIDesign/
 ├── app/streamlit_app.py         Web UI (two-tab Streamlit app)
 ├── src/
 │   ├── preprocess.py            Data cleaning + train/test split
-│   ├── scrape_lemon.py          LEMON repair manual BFS scraper
+│   ├── scrape_lemon.py          LEMON repair manual scraper
 │   ├── extract_lemon.py         LEMON binary extraction via ctypes/libmtbl
 │   ├── build_vectorstore.py     DTC + LEMON embedding → ChromaDB
 │   ├── fetch_nhtsa.py           Optional: NHTSA complaint data
@@ -250,7 +322,7 @@ Vehicle-Diagnostic-Prediction-and-Explanation-System/
 ├── tests/
 │   ├── test_harness.py          Automated evaluation suite
 │   ├── metrics_report.json      ML + RAG + LLM summary metrics
-│   └── evaluation_results.csv   Per-row prediction results (n=200)
+│   └── evaluation_results.csv  Per-row prediction results (n=200)
 ├── evidence/                    All artefacts — diagrams, charts, JSON reports
 ├── models/                      Trained model artifacts + metrics JSON
 ├── Data/
@@ -258,7 +330,7 @@ Vehicle-Diagnostic-Prediction-and-Explanation-System/
 │   ├── Toyota_RAG_Data.json
 │   ├── lemon/toyota_pages.jsonl
 │   └── libre_dtc/
-├── vectorstore/chroma_db/       Persistent ChromaDB store (pre-built in release)
+├── vectorstore/chroma_db/       Persistent ChromaDB store
 ├── docs/proposal.md             Full 12-component project proposal
 ├── requirements.txt
 ├── .env.example
