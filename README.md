@@ -135,14 +135,39 @@ See [`evidence/architecture_diagram.png`](evidence/architecture_diagram.png) for
 
 ## Setup & Run
 
-### Prerequisites
-- Python 3.9+
-- **LLM — choose one:**
-  - OpenAI API key (fast, ~2–5s per report) — add to `.env` as `OPENAI_API_KEY=sk-...`
-  - OR Ollama + DeepSeek-R1:7b (free, offline, ~90–130s per report) — see below
-- LEMON database server running on `http://127.0.0.1:8080` (for re-scraping only — not needed if using the pre-built release)
+### Option A — Pre-built Release (recommended)
 
-### Running without an OpenAI API key (DeepSeek via Ollama)
+> No training required. Download pre-built models and data from the release, then run.
+
+```bash
+# 1. Clone the repo
+git clone https://github.com/mbilal6-gmu/Vehicle-Diagnostic-Prediction-and-Explanation-System.git
+cd Vehicle-Diagnostic-Prediction-and-Explanation-System
+
+# 2. Download data_and_models.zip from the latest release and unzip into the project root
+#    → https://github.com/mbilal6-gmu/Vehicle-Diagnostic-Prediction-and-Explanation-System/releases
+
+# 3. Install dependencies
+python -m venv venv
+.\venv\Scripts\Activate.ps1      # Windows PowerShell
+pip install -r requirements.txt
+
+# 4. Configure LLM — add OPENAI_API_KEY to .env, or leave blank to use Ollama (see below)
+
+# 5. Launch
+streamlit run app/streamlit_app.py
+```
+
+The app opens at `http://localhost:8501`. The sidebar shows live status: Risk Model ✅ · Vector Store ✅ · LLM ✅/🟡/❌.
+
+### LLM Options
+
+| Option | Speed | Cost | Setup |
+|---|---|---|---|
+| **OpenAI GPT-4o** (recommended) | ~2–5s | Pay-per-use | Add `OPENAI_API_KEY=sk-...` to `.env` |
+| **DeepSeek-R1:7b via Ollama** | ~90–130s | Free / offline | See instructions below |
+
+#### Running without an OpenAI API key (DeepSeek via Ollama)
 
 ```bash
 # 1. Install Ollama from https://ollama.com/download
@@ -155,25 +180,27 @@ ollama serve
 
 The app sidebar shows which LLM is active (✅ OpenAI / 🟡 DeepSeek / ❌ None).
 
-### Installation
+---
+
+### Option B — Build From Scratch
+
+Use this path only to re-train, re-scrape, or regenerate the vector store.
+
+**Additional prerequisite:** LEMON database server running on `http://127.0.0.1:8080` (for re-scraping).
 
 ```bash
 python -m venv venv
-.\venv\Scripts\Activate.ps1      # Windows
+.\venv\Scripts\Activate.ps1      # Windows PowerShell
 pip install -r requirements.txt
 cp .env.example .env             # Add your OPENAI_API_KEY
-```
 
-### Run Order
-
-```bash
 # 1. Preprocess training data
 python src/preprocess.py
 
-# 2. Scrape LEMON repair manual (requires lemon-website.exe running)
+# 2. Scrape LEMON repair manual (requires lemon-website.exe running on port 8080)
 python src/scrape_lemon.py
 
-# 3. Build the vector store (takes ~2 min, downloads embedding model once)
+# 3. Build the vector store (~2 min, downloads embedding model once)
 python src/build_vectorstore.py
 
 # 4. Train ML models
@@ -243,6 +270,7 @@ evidence/
 | LEMON scope: Toyota 2020 only | Repair procedure chunks limited to 2020 model year | Year-mismatch flag shown in UI; adjacent-year content still surfaced |
 | Local LLM (DeepSeek-R1:7b) latency | ~90–130s per report vs ~2s for GPT-4o | 5-chunk context cap; `<think>` stripping; schema normalisation |
 | Local LLM DTC knowledge | DeepSeek may hallucinate rare codes | `_correct_dtc_descriptions()` overwrites from vectorstore; suspect candidates dropped |
+| TSB coverage | Only 302 TSBs from 2020 LEMON scrape | TSB codes from other years return no-match gracefully |
 
 ---
 
