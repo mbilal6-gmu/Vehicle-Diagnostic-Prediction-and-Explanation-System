@@ -21,8 +21,6 @@
 
 ---
 
----
-
 ## Problem
 
 Modern vehicles generate rich ECU sensor data and fault codes, but interpreting them requires specialist knowledge most owners don't have. Basic OBD readers surface a code with no explanation, no urgency rating, and no recommended action. This system combines a predictive ML model, a validated knowledge base, and a hallucination-controlled LLM to give any user a plain-English, traceable diagnostic report.
