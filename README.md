@@ -3,11 +3,45 @@
 **George Mason University — AI Design and Deployment Risks | Spring 2026**
 **Team:** Cain & Muhammad | **Mode:** Implementation-Heavy
 
+## Notes to Evaluator
+
+```README.md``` (This document) -> Full system architecture + metrics
+
+```/evidence/architecture_diagram.png``` -> Full system architecture diagram
+
+```/evidence``` -> System artifacts
+
+```tests/metrics_report.json``` -> Benchmark test results
+
+```tests/test_harness.py``` -> Validation & reproducability unit test suite
+
+```Final Project Presentation``` -> https://docs.google.com/presentation/d/1m6z-aUPFaOcFb8xLA7sW5ZBIRYfgAuvkiKnVCtmf0OU/edit?usp=sharing 
+
+```Final Project Video``` ->
+
 ---
 
 ## Problem
 
 Modern vehicles generate rich ECU sensor data and fault codes, but interpreting them requires specialist knowledge most owners don't have. Basic OBD readers surface a code with no explanation, no urgency rating, and no recommended action. This system combines a predictive ML model, a validated knowledge base, and a hallucination-controlled LLM to give any user a plain-English, traceable diagnostic report.
+
+---
+
+## System Boundary
+In scope:
+- Toyota diagnostics (2020)
+- OBD sensor risk prediction
+- DTC retrieval + explanation
+- Faithfulness-controlled LLM reporting
+- Recommended repair actions
+
+Out of scope:
+- Repair execution
+- Non-Toyota manufacturers
+- Real mechanic certification
+
+## Human Review Points
+- LLM outputs blocked if faithfulness < 70%, information sent to mechanic for human review
 
 ---
 
@@ -73,6 +107,32 @@ See [`evidence/architecture_diagram.png`](evidence/architecture_diagram.png) for
 
 ---
 
+## Release Gates
+- RMSE ≤ 0.05
+- R² ≥ 0.90
+- Precision@1 ≥ 90%
+- LLM Faithfulness ≥ 0.70
+- Latency < 10s
+
+---
+
+## Monitoring
+- Automated test harness
+- Bias checks across vehicle models
+- Faithfulness gate logs
+- Error/failure logging
+
+---
+
+## Validation Methodology
+- Unit tests: preprocessing + model outputs
+- Integration tests: end-to-end ML + RAG + LLM
+- Scenario testing: real + synthetic DTC cases
+- Red-team checks: low-context / hallucination scenarios
+- Benchmark comparisons: metrics vs release targets
+
+---
+
 ## Setup & Run
 
 ### Prerequisites
@@ -122,6 +182,7 @@ python evidence/generate_evidence.py
 
 ---
 
+
 ## Validation Results
 
 | Metric | Target | Result | Evidence |
@@ -138,8 +199,6 @@ python evidence/generate_evidence.py
 Full results: `tests/metrics_report.json` | Per-row breakdown: `tests/evaluation_results.csv`
 
 **CEL note:** CEL F1 = 0 due to extreme class imbalance in the synthetic dataset (all test rows are negative). AUC=0.9893 confirms the model correctly orders risk; the UI uses `risk_score > 0.5` as the CEL heuristic.
-
----
 
 ## Evidence Folder
 
@@ -171,6 +230,21 @@ evidence/
 | Local LLM DTC knowledge | DeepSeek may hallucinate rare codes | `_correct_dtc_descriptions()` overwrites from vectorstore; suspect candidates dropped |
 
 ---
+
+## Trade-offs
+- Synthetic labels improve coverage but reduce ground-truth certainty
+- Toyota-only scope improves realism but limits generalizability
+- LLM reasoning improves explanation but increases latency
+
+--- 
+
+## Next Steps
+- Expand manufacturers
+- Add real OBD scan datasets
+- Add repair manuals
+- Mobile deployment
+
+--- 
 
 ## Disclaimer
 
