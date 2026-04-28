@@ -19,9 +19,13 @@ Run ONCE before starting the app:
 import os
 import json
 import csv
+import torch
 import chromadb
 from chromadb.utils import embedding_functions
 from tqdm import tqdm
+
+_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"[build_vectorstore] Embedding device: {_DEVICE}")
 
 DATA_DIR      = os.path.join(os.path.dirname(__file__), "..", "Data")
 LIBRE_DIR     = os.path.join(DATA_DIR, "libre_dtc")
@@ -147,6 +151,9 @@ def load_lemon(path: str) -> list[dict]:
                     "id":           rec["id"],
                     "document":     rec["document"],
                     "dtc_code":     meta.get("dtc_code",    ""),
+                    "all_dtcs":     meta.get("all_dtcs",    ""),
+                    "tsb_refs":     meta.get("tsb_refs",    ""),
+                    "model_year":   meta.get("model_year",  ""),
                     "engine_code":  meta.get("engine_code", ""),
                     "description":  meta.get("description", ""),
                     "source":       meta.get("source",      "LEMON Vehicle Manual Database"),
@@ -177,7 +184,8 @@ def upsert_to_chroma(rows: list[dict], vs_dir: str):
     client = chromadb.PersistentClient(path=vs_dir)
 
     emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=EMBED_MODEL
+        model_name=EMBED_MODEL,
+        device=_DEVICE,
     )
 
     # Drop and recreate to ensure clean build
@@ -200,12 +208,15 @@ def upsert_to_chroma(rows: list[dict], vs_dir: str):
             ids        = [r["id"]       for r in batch],
             documents  = [r["document"] for r in batch],
             metadatas  = [{
-                "dtc_code":    r["dtc_code"],
-                "engine_code": r["engine_code"],
-                "description": r["description"],
-                "source":      r["source"],
-                "source_url":  r["source_url"],
-                "image_keys":  r.get("image_keys", ""),
+                "dtc_code":    r.get("dtc_code",    ""),
+                "all_dtcs":    r.get("all_dtcs",    ""),
+                "tsb_refs":    r.get("tsb_refs",    ""),
+                "model_year":  r.get("model_year",  ""),
+                "engine_code": r.get("engine_code", ""),
+                "description": r.get("description", ""),
+                "source":      r.get("source",      ""),
+                "source_url":  r.get("source_url",  ""),
+                "image_keys":  r.get("image_keys",  ""),
             } for r in batch],
         )
 

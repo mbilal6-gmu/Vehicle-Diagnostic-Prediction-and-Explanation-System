@@ -15,30 +15,31 @@ Modern vehicles generate rich ECU sensor data and fault codes, but interpreting 
 
 ```
 User Input (two modes)
-  ├── Mode A: Plain-text symptoms  →  Differential Diagnosis Engine (GPT-4o)
+  ├── Mode A: Plain-text symptoms  →  Differential Diagnosis Engine (GPT-4o / DeepSeek-R1)
   └── Mode B: OBD sensor values   →  XGBoost Failure Risk Score
 
               ↓
      RAG Retrieval Layer
      Hybrid BM25 + ChromaDB Vector Search
-     (6,017 DTC records from 3 sources)
+     (~88,000 chunks from 3 knowledge sources)
 
               ↓
      LLM Reasoning (GPT-4o)
      Structured JSON report: diagnosis, causes, actions, urgency, sources
-     Fallback: DeepSeek via Ollama (offline)
+     Fallback: DeepSeek-R1:7b via Ollama (offline)
 
               ↓
-     ┌─── CONTROL POINT ───┐
-     │  LLM Judge          │  ← Faithfulness gate (≥ 70% required)
-     └─────────────────────┘
+     ┌─── CONTROL POINT 1 ─────────┐   ┌─── CONTROL POINT 2 ──────────────┐
+     │  LLM Faithfulness Judge     │   │  Hallucination Filter             │
+     │  Block report if < 0.70     │   │  Drop unverified + suspect DTCs   │
+     └─────────────────────────────┘   └───────────────────────────────────┘
 
               ↓
      Streamlit Web UI
      Source citations · SHAP attributions · Urgency label · Disclaimer
 ```
 
-See `evidence/architecture_diagram.png` for the full visual with control points.
+See [`evidence/architecture_diagram.png`](evidence/architecture_diagram.png) for the full visual with data-flow and control points.
 
 ---
 
@@ -48,6 +49,7 @@ See `evidence/architecture_diagram.png` for the full visual with control points.
 |---|---|---|---|
 | `Toyota_Final_Current.xlsx` | Synthetic OBD-II patterns | ML training | 12,000 rows × 30 cols |
 | `Toyota_RAG_Data.csv` | toyota-club.net (scraped) | RAG knowledge base | 12,978 DTC records |
+| `toyota_pages.jsonl` | LEMON Vehicle Manual Database (local) | RAG — repair procedures | ~74,950 chunks |
 | `toyota.json` | Libre Automotive Diagnostic (AGPL) | RAG supplement | 42 P1xxx Toyota codes |
 | `dtc_db.json` | Libre Automotive Diagnostic (AGPL) | RAG supplement | 39 SAE OBD-II codes |
 
@@ -60,14 +62,14 @@ See `evidence/architecture_diagram.png` for the full visual with control points.
 | Tool | Type | Role | Why |
 |---|---|---|---|
 | **OpenAI GPT-4o** | Commercial | Report generation + LLM Judge | Structured JSON output, temperature=0, highest faithfulness |
+| **DeepSeek-R1:7b / Ollama** | Open-source | LLM offline fallback | Activates automatically when OpenAI unavailable; `<think>` tags stripped |
 | **XGBoost** | Open-source | Failure risk regression | Handles tabular sensor data; native SHAP support |
-| **SHAP** | Open-source | Explainability | Per-prediction feature attributions; identifies which sensors drove the risk score |
+| **SHAP** | Open-source | Explainability | Per-prediction feature attributions |
 | **ChromaDB** | Open-source | Vector store | Persistent local store; cosine similarity; no cloud dependency |
-| **LangChain** | Open-source | RAG orchestration | Standardized retrieval chain |
-| **rank-bm25** | Open-source | Keyword search | DTC codes are exact strings — BM25 outperforms vector search for code lookup |
+| **rank-bm25** | Open-source | Keyword search | DTC codes are exact strings — BM25 outperforms vector-only for code lookup |
 | **sentence-transformers** | Open-source | Local embeddings | No API cost; fully offline; all-MiniLM-L6-v2 (384-dim) |
+| **LEMON (lemon-website.exe)** | Proprietary (local) | Primary repair knowledge | Toyota official repair procedures, TSBs, DTC diagnostic trees |
 | **Streamlit** | Open-source | Web UI | Python-native; rapid deployment |
-| **DeepSeek via Ollama** | Open-source | LLM fallback | Activates automatically when OpenAI is unavailable |
 
 ---
 
@@ -75,7 +77,8 @@ See `evidence/architecture_diagram.png` for the full visual with control points.
 
 ### Prerequisites
 - Python 3.9+
-- OpenAI API key (or Ollama installed with DeepSeek for offline use)
+- OpenAI API key (or Ollama with `deepseek-r1:7b` for offline use)
+- LEMON database server running on `http://127.0.0.1:8080` (for re-scraping only)
 
 ### Installation
 
@@ -92,40 +95,49 @@ cp .env.example .env             # Add your OPENAI_API_KEY
 # 1. Preprocess training data
 python src/preprocess.py
 
-# 2. Build the vector store (takes ~2 min, downloads embedding model once)
+# 2. Scrape LEMON repair manual (requires lemon-website.exe running)
+python src/scrape_lemon.py
+
+# 3. Build the vector store (takes ~2 min, downloads embedding model once)
 python src/build_vectorstore.py
 
-# 3. Train ML models
+# 4. Train ML models
 python src/train_model.py
 
-# 4. Generate SHAP explainability plots
+# 5. Generate SHAP explainability plots
 python src/generate_shap_plots.py
 
-# 5. Run bias check
+# 6. Run bias check
 python src/bias_check.py
 
-# 6. Launch web app
+# 7. Launch web app
 streamlit run app/streamlit_app.py
 
-# 7. Run automated test harness
+# 8. Run automated test harness
 python tests/test_harness.py
+
+# 9. Regenerate evidence artefacts
+python evidence/generate_evidence.py
 ```
 
 ---
 
 ## Validation Results
 
-| Metric | Target | Result |
-|---|---|---|
-| XGBoost Risk RMSE | ≤ 0.05 | **0.0098** ✅ |
-| XGBoost Risk R² | ≥ 0.90 | **0.9935** ✅ |
-| CEL Classifier AUC | ≥ 0.80 | **0.9893** ✅ |
-| RAG Precision@1 | ≥ 90% | **100%** ✅ |
-| LLM Mean Faithfulness | ≥ 0.70 | **0.77** (16/20 cases ≥ gate) ✅ |
-| LLM Faithfulness gate | Block < 70% | Implemented ✅ |
-| End-to-end latency | < 10s | **~2.3s** ✅ |
+| Metric | Target | Result | Evidence |
+|---|---|---|---|
+| XGBoost Risk RMSE | ≤ 0.05 | **0.0098** ✅ | `models/metrics_report.json` · `evidence/ml_performance.png` |
+| XGBoost Risk R² | ≥ 0.90 | **0.9935** ✅ | `models/metrics_report.json` · `evidence/ml_performance.png` |
+| CEL Classifier AUC | ≥ 0.80 | **0.9893** ✅ | `models/metrics_report.json` |
+| RAG Precision@1 | ≥ 90% | **100%** ✅ | `tests/metrics_report.json` |
+| LLM Mean Faithfulness | ≥ 0.70 | **0.77** (16/20 pass gate) ✅ | `tests/metrics_report.json` · `evidence/faithfulness_distribution.png` |
+| LLM Faithfulness gate | Block < 70% | Implemented ✅ | `src/llm_judge.py:judge_faithfulness()` |
+| Hallucination filter | Drop suspect DTCs | Implemented ✅ | `src/llm_judge.py:_correct_dtc_descriptions()` · `evidence/hallucination_control.png` |
+| End-to-end latency (GPT-4o) | < 10s | **~2.3s** ✅ | `tests/metrics_report.json` |
 
 Full results: `tests/metrics_report.json` | Per-row breakdown: `tests/evaluation_results.csv`
+
+**CEL note:** CEL F1 = 0 due to extreme class imbalance in the synthetic dataset (all test rows are negative). AUC=0.9893 confirms the model correctly orders risk; the UI uses `risk_score > 0.5` as the CEL heuristic.
 
 ---
 
@@ -133,11 +145,17 @@ Full results: `tests/metrics_report.json` | Per-row breakdown: `tests/evaluation
 
 ```
 evidence/
-├── architecture_diagram.png   System boundary + control points
-├── shap_summary_plot.png      Top-15 feature importances (bar)
-├── shap_beeswarm.png          SHAP value distribution by feature
-├── bias_by_model.png          Risk score distribution across 10 vehicle models
-└── screenshots/               App screenshots (both tabs)
+├── architecture_diagram.png     Full system pipeline — data flow + two control points
+├── rag_retrieval_quality.png    Hybrid scoring pipeline + observed chunk scores (P0300 query)
+├── ml_performance.png           Predicted vs actual risk scatter + residual histogram (n=200)
+├── faithfulness_distribution.png  LLM faithfulness gate — per-case bars + pass/fail pie
+├── vectorstore_stats.png        Knowledge-base source breakdown (~88k total chunks)
+├── hallucination_control.png    DTC description correction & suspect-candidate filter flow
+├── shap_summary_plot.png        Top-15 feature importances (bar chart)
+├── shap_beeswarm.png            SHAP value distribution by feature
+├── bias_by_model.png            Risk score distribution across 10 vehicle models (ANOVA)
+├── bias_check_report.json       ANOVA F-stat, p-value, per-model CI95 (machine-readable)
+└── generate_evidence.py         Reproducible script — re-runs all chart generation
 ```
 
 ---
@@ -148,8 +166,9 @@ evidence/
 |---|---|---|
 | LLM-generated training labels | Metrics reflect proxy fidelity, not OBD ground truth | Fully disclosed in all reports |
 | CEL classifier F1 = 0 (extreme imbalance) | Cannot predict check-engine-light independently | Replaced with `risk_score > 0.5` rule |
-| RAG content is 1–2 lines per code | LLM has limited repair procedure context | Hybrid retrieval + faithfulness gate limits scope creep |
-| Toyota 2014–2020 only | No coverage for other makes/years | Scope explicitly bounded |
+| LEMON scope: Toyota 2020 only | Repair procedure chunks limited to 2020 model year | Year-mismatch flag shown in UI; adjacent-year content still surfaced |
+| Local LLM (DeepSeek-R1:7b) latency | ~90–130s per report vs ~2s for GPT-4o | 5-chunk context cap; `<think>` stripping; schema normalisation |
+| Local LLM DTC knowledge | DeepSeek may hallucinate rare codes | `_correct_dtc_descriptions()` overwrites from vectorstore; suspect candidates dropped |
 
 ---
 
@@ -166,17 +185,28 @@ AIDesign/
 ├── app/streamlit_app.py         Web UI (two-tab Streamlit app)
 ├── src/
 │   ├── preprocess.py            Data cleaning + train/test split
-│   ├── build_vectorstore.py     DTC embedding → ChromaDB
+│   ├── scrape_lemon.py          LEMON repair manual scraper
+│   ├── extract_lemon.py         LEMON binary extraction via ctypes/libmtbl
+│   ├── build_vectorstore.py     DTC + LEMON embedding → ChromaDB
 │   ├── fetch_nhtsa.py           Optional: NHTSA complaint data
 │   ├── train_model.py           XGBoost + SHAP explainer
 │   ├── rag_agent.py             Hybrid BM25 + vector retrieval
-│   ├── llm_judge.py             LLM report + faithfulness judge
+│   ├── llm_judge.py             LLM report + faithfulness judge + hallucination guard
 │   ├── generate_shap_plots.py   SHAP visualization scripts
 │   └── bias_check.py            Fairness check across vehicle models
-├── tests/test_harness.py        Automated evaluation suite
-├── docs/proposal.md             Full 12-component project proposal
-├── evidence/                    Plots, screenshots, metrics
+├── tests/
+│   ├── test_harness.py          Automated evaluation suite
+│   ├── metrics_report.json      ML + RAG + LLM summary metrics
+│   └── evaluation_results.csv  Per-row prediction results (n=200)
+├── evidence/                    All artefacts — diagrams, charts, JSON reports
 ├── models/                      Trained model artifacts + metrics JSON
+├── Data/
+│   ├── Toyota_Final_Current.xlsx
+│   ├── Toyota_RAG_Data.json
+│   ├── lemon/toyota_pages.jsonl
+│   └── libre_dtc/
+├── vectorstore/chroma_db/       Persistent ChromaDB store
+├── docs/proposal.md             Full 12-component project proposal
 ├── requirements.txt
 ├── .env.example
 └── RUN_ORDER.md
