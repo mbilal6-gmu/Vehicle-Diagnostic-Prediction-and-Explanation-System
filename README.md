@@ -17,7 +17,7 @@
 
 ```Final Project Presentation``` -> https://docs.google.com/presentation/d/1m6z-aUPFaOcFb8xLA7sW5ZBIRYfgAuvkiKnVCtmf0OU/edit?usp=sharing 
 
-```Final Project Video``` ->
+```Final Project Video``` -> https://youtu.be/RGdnAwFuSNw 
 
 ---
 
