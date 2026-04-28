@@ -77,8 +77,23 @@ See [`evidence/architecture_diagram.png`](evidence/architecture_diagram.png) for
 
 ### Prerequisites
 - Python 3.9+
-- OpenAI API key (or Ollama with `deepseek-r1:7b` for offline use)
-- LEMON database server running on `http://127.0.0.1:8080` (for re-scraping only)
+- **LLM — choose one:**
+  - OpenAI API key (fast, ~2–5s per report) — add to `.env` as `OPENAI_API_KEY=sk-...`
+  - OR Ollama + DeepSeek-R1:7b (free, offline, ~90–130s per report) — see below
+- LEMON database server running on `http://127.0.0.1:8080` (for re-scraping only — not needed if using the pre-built release)
+
+### Running without an OpenAI API key (DeepSeek via Ollama)
+
+```bash
+# 1. Install Ollama from https://ollama.com/download
+# 2. Pull the model (one-time, ~4 GB download)
+ollama pull deepseek-r1:7b
+# 3. Start the Ollama server (keep this terminal open)
+ollama serve
+# 4. Leave OPENAI_API_KEY blank in .env — the app detects Ollama automatically
+```
+
+The app sidebar shows which LLM is active (✅ OpenAI / 🟡 DeepSeek / ❌ None).
 
 ### Installation
 

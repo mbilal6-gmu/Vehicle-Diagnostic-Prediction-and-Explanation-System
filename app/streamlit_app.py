@@ -94,7 +94,7 @@ def vehicle_sidebar():
         model  = st.selectbox("Model", VEHICLE_MODELS, index=1)
         year   = st.selectbox("Year",  YEARS,          index=0)
 
-        engine_options = MODEL_ENGINE_MAP.get(model, ["Unknown"])
+        engine_options = ["Unknown"] + MODEL_ENGINE_MAP.get(model, [])
         engine = st.selectbox(
             "Engine Code",
             engine_options,
@@ -108,10 +108,42 @@ def vehicle_sidebar():
 
 def _show_system_status():
     st.caption("**System Status**")
-    models   = load_models()
-    vs_path  = os.path.join(os.path.dirname(__file__), "..", "vectorstore", "chroma_db")
-    st.caption("Risk Model: " + ("✅" if models.get("risk") else "❌ run train_model.py"))
+    models  = load_models()
+    vs_path = os.path.join(os.path.dirname(__file__), "..", "vectorstore", "chroma_db")
+    st.caption("Risk Model: "   + ("✅" if models.get("risk") else "❌ run train_model.py"))
     st.caption("Vector Store: " + ("✅" if os.path.exists(vs_path) else "❌ run build_vectorstore.py"))
+
+    # LLM availability
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    if openai_key and openai_key.startswith("sk-"):
+        st.caption("LLM: ✅ OpenAI GPT-4o")
+    else:
+        # Check Ollama
+        try:
+            import requests as _req
+            r = _req.get("http://localhost:11434/api/tags", timeout=2)
+            ollama_ok = r.status_code == 200
+        except Exception:
+            ollama_ok = False
+
+        if ollama_ok:
+            st.caption("LLM: 🟡 DeepSeek (Ollama) — slower, ~90–130s")
+        else:
+            st.caption("LLM: ❌ No LLM configured")
+            st.warning(
+                "**No LLM available.** Choose one:\n\n"
+                "**Option A — OpenAI (fast)**\n"
+                "Add to `.env`:\n```\nOPENAI_API_KEY=sk-...\n```\n\n"
+                "**Option B — DeepSeek offline (free)**\n"
+                "```\n"
+                "# 1. Install Ollama: https://ollama.com\n"
+                "# 2. Pull model:\n"
+                "ollama pull deepseek-r1:7b\n"
+                "# 3. Start server:\n"
+                "ollama serve\n"
+                "```",
+                icon="⚠️",
+            )
 
 
 # --------------------------------------------------------------------------- #
@@ -435,9 +467,17 @@ def sensor_tab(vehicle_model: str, vehicle_year: int, engine_code: str):
         risk_boost = max(risk_boost, 0.25)   # lean/rich running → P0171/P0172
         sensor_cel = True
 
+    # Normalise code input — accept loose TSB formats like TSB0008-21
+    from src.rag_agent import detect_code_type, _normalize_tsb
+    dtc_raw   = dtc_code.strip() if dtc_code else ""
+    dtc_clean = ""
+    if dtc_raw:
+        dtc_clean, _code_type = detect_code_type(dtc_raw)
+        if _code_type == "tsb" and dtc_clean.upper() != dtc_raw.upper():
+            st.info(f"TSB format normalised: **{dtc_raw}** → **{dtc_clean}**")
+
     # DTC presence overrides: a stored DTC means CEL is on; risk reflects severity
-    dtc_clean = dtc_code.strip().upper() if dtc_code else ""
-    if dtc_clean and not dtc_clean.startswith("T-SB"):
+    if dtc_clean and not dtc_clean.upper().startswith("T-SB"):
         first_char = dtc_clean[0] if dtc_clean else ""
         if first_char == "P":
             # P0xxx generic powertrain — higher severity
@@ -469,7 +509,7 @@ def sensor_tab(vehicle_model: str, vehicle_year: int, engine_code: str):
             rpm, coolant, maf, load, fuel_trim, throttle, speed, intake, risk_score
         )
         chunks = retrieve(
-            dtc_code      = dtc_code.strip().upper() if dtc_code else "",
+            dtc_code      = dtc_clean,
             engine_code   = engine_code if engine_code != "Unknown" else "",
             vehicle_model = vehicle_model,
             vehicle_year  = vehicle_year,
@@ -492,7 +532,7 @@ def sensor_tab(vehicle_model: str, vehicle_year: int, engine_code: str):
             report  = generate_report(
                 context_chunks=chunks, vehicle_model=vehicle_model,
                 vehicle_year=vehicle_year, engine_code=engine_code,
-                dtc_code=dtc_code.strip().upper() if dtc_code else "",
+                dtc_code=dtc_clean,
                 risk_score=risk_score, cel_likely=risk_score > 0.5,
                 sensor_readings={
                     "coolant_temp_c":    coolant,
