@@ -9,6 +9,8 @@ Sources merged (in priority order):
   2. libre toyota.json    — 42 Toyota P1xxx manufacturer-specific codes
   3. libre dtc_db.json    — 39 standard OBD-II P0001-P0038 codes
   4. Data/nhtsa/nhtsa_complaints.csv — NHTSA complaint summaries (if present)
+  5. Data/lemon/toyota_pages.jsonl   — LEMON manual pages (if present)
+                                       Run src/extract_lemon.py first to generate.
 
 Run ONCE before starting the app:
     python src/build_vectorstore.py
@@ -17,14 +19,19 @@ Run ONCE before starting the app:
 import os
 import json
 import csv
+import torch
 import chromadb
 from chromadb.utils import embedding_functions
 from tqdm import tqdm
+
+_DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
+print(f"[build_vectorstore] Embedding device: {_DEVICE}")
 
 DATA_DIR      = os.path.join(os.path.dirname(__file__), "..", "Data")
 LIBRE_DIR     = os.path.join(DATA_DIR, "libre_dtc")
 NHTSA_CSV     = os.path.join(DATA_DIR, "nhtsa", "nhtsa_complaints.csv")
 RAG_CSV       = os.path.join(DATA_DIR, "Toyota_RAG_Data.csv.xls")  # CSV despite .xls extension
+LEMON_JSONL   = os.path.join(DATA_DIR, "lemon", "toyota_pages.jsonl")
 VS_DIR        = os.path.join(os.path.dirname(__file__), "..", "vectorstore", "chroma_db")
 
 COLLECTION_NAME = "toyota_diagnostics"
@@ -49,6 +56,7 @@ def load_rag_csv(path: str) -> list[dict]:
                 "description":  r.get("description", ""),
                 "source":       "toyota-club.net",
                 "source_url":   r.get("source_url", ""),
+                "image_keys":   "",
             })
     print(f"  Loaded {len(rows)} rows from RAG CSV")
     return rows
@@ -70,6 +78,7 @@ def load_libre_toyota(path: str) -> list[dict]:
             "description":  desc,
             "source":       "Libre Automotive Diagnostic",
             "source_url":   "https://github.com/Libre-Diagnosctic/libre-automotive-diagnostic",
+            "image_keys":   "",
         })
     print(f"  Loaded {len(rows)} rows from libre toyota.json")
     return rows
@@ -91,6 +100,7 @@ def load_libre_obd2(path: str) -> list[dict]:
             "description":  desc,
             "source":       "SAE OBD-II Standard (Libre DB)",
             "source_url":   "https://github.com/Libre-Diagnosctic/libre-automotive-diagnostic",
+            "image_keys":   "",
         })
     print(f"  Loaded {len(rows)} rows from libre dtc_db.json")
     return rows
@@ -116,8 +126,43 @@ def load_nhtsa(path: str) -> list[dict]:
                 "description":  r.get("description", ""),
                 "source":       "NHTSA Complaints API",
                 "source_url":   "https://api.nhtsa.gov/",
+                "image_keys":   "",
             })
     print(f"  Loaded {len(rows)} rows from NHTSA")
+    return rows
+
+
+def load_lemon(path: str) -> list[dict]:
+    """Load LEMON manual pages from JSONL if the file exists."""
+    if not os.path.exists(path):
+        print("  LEMON JSONL not found — skipping")
+        print("    (To add real repair manuals: run  python src/extract_lemon.py  in WSL first)")
+        return []
+    rows = []
+    with open(path, encoding="utf-8") as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec  = json.loads(line)
+                meta = rec.get("metadata", {})
+                rows.append({
+                    "id":           rec["id"],
+                    "document":     rec["document"],
+                    "dtc_code":     meta.get("dtc_code",    ""),
+                    "all_dtcs":     meta.get("all_dtcs",    ""),
+                    "tsb_refs":     meta.get("tsb_refs",    ""),
+                    "model_year":   meta.get("model_year",  ""),
+                    "engine_code":  meta.get("engine_code", ""),
+                    "description":  meta.get("description", ""),
+                    "source":       meta.get("source",      "LEMON Vehicle Manual Database"),
+                    "source_url":   meta.get("source_url",  ""),
+                    "image_keys":   meta.get("image_keys",  ""),
+                })
+            except (json.JSONDecodeError, KeyError):
+                continue
+    print(f"  Loaded {len(rows):,} chunks from LEMON JSONL")
     return rows
 
 
@@ -139,7 +184,8 @@ def upsert_to_chroma(rows: list[dict], vs_dir: str):
     client = chromadb.PersistentClient(path=vs_dir)
 
     emb_fn = embedding_functions.SentenceTransformerEmbeddingFunction(
-        model_name=EMBED_MODEL
+        model_name=EMBED_MODEL,
+        device=_DEVICE,
     )
 
     # Drop and recreate to ensure clean build
@@ -162,11 +208,15 @@ def upsert_to_chroma(rows: list[dict], vs_dir: str):
             ids        = [r["id"]       for r in batch],
             documents  = [r["document"] for r in batch],
             metadatas  = [{
-                "dtc_code":    r["dtc_code"],
-                "engine_code": r["engine_code"],
-                "description": r["description"],
-                "source":      r["source"],
-                "source_url":  r["source_url"],
+                "dtc_code":    r.get("dtc_code",    ""),
+                "all_dtcs":    r.get("all_dtcs",    ""),
+                "tsb_refs":    r.get("tsb_refs",    ""),
+                "model_year":  r.get("model_year",  ""),
+                "engine_code": r.get("engine_code", ""),
+                "description": r.get("description", ""),
+                "source":      r.get("source",      ""),
+                "source_url":  r.get("source_url",  ""),
+                "image_keys":  r.get("image_keys",  ""),
             } for r in batch],
         )
 
@@ -183,6 +233,7 @@ def build():
     rows += load_libre_toyota(os.path.join(LIBRE_DIR, "toyota.json"))
     rows += load_libre_obd2(os.path.join(LIBRE_DIR,  "dtc_db.json"))
     rows += load_nhtsa(NHTSA_CSV)
+    rows += load_lemon(LEMON_JSONL)
 
     print(f"\nTotal before dedup: {len(rows)}")
     rows = deduplicate(rows)

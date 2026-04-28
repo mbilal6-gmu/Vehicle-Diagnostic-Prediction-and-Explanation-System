@@ -15,6 +15,7 @@ Data/Toyota_RAG_Data.csv.xls
 Data/Toyota_RAG_Data.json
 Data/processed/
 Data/nhtsa/
+Data/lemon/
 
 # Trained model binaries
 models/*.pkl
@@ -32,3 +33,15 @@ Thumbs.db
 
 # Jupyter
 .ipynb_checkpoints/
+
+# Evidence and docs — maintained separately
+evidence/
+docs/
+
+# Internal / dev-only
+.claude/
+HANDOFF.md
+pymtbl/
+Vehicle-Diagnostic-Prediction-and-Explanation-System/
+src/debug_pages.py
+src/profile_lemon.py

@@ -18,25 +18,36 @@ import joblib
 import numpy as np
 import pandas as pd
 import streamlit as st
+from pathlib import Path
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 from src.rag_agent  import retrieve
 from src.llm_judge  import generate_report, generate_candidates, update_candidates
 
-MODEL_DIR = os.path.join(os.path.dirname(__file__), "..", "models")
-DATA_DIR  = os.path.join(os.path.dirname(__file__), "..", "Data", "processed")
+MODEL_DIR   = os.path.join(os.path.dirname(__file__), "..", "models")
+DATA_DIR    = os.path.join(os.path.dirname(__file__), "..", "Data", "processed")
+LEMON_IMGS  = Path(os.path.dirname(__file__)) / ".." / "Data" / "lemon" / "images"
 
 VEHICLE_MODELS = [
     "corolla", "camry", "rav4", "highlander",
     "prius", "tacoma", "4runner", "sienna", "yaris", "avalon",
 ]
-YEARS = list(range(2014, 2021))
-ENGINE_CODES = [
-    "Unknown",
-    "2ZR-FE", "2AR-FE", "2GR-FE", "2GR-FXS", "A25A-FXS",
-    "1GD-FTV", "2TR-FE", "1UR-FE", "2AR-FXE", "Gasoline (common)",
-]
+YEARS = [2020]
+
+# Maps each model to its compatible 2020 engine codes (first entry = default)
+MODEL_ENGINE_MAP: dict[str, list[str]] = {
+    "corolla":    ["2ZR-FE"],
+    "yaris":      ["2ZR-FE"],
+    "prius":      ["2ZR-FXE"],
+    "camry":      ["A25A-FKS", "A25A-FXS", "2AR-FE", "2AR-FXE", "2GR-FE"],
+    "rav4":       ["A25A-FKS", "A25A-FXS", "2GR-FE"],
+    "highlander": ["2GR-FKS", "A25A-FXS"],
+    "avalon":     ["2GR-FKS", "A25A-FXS", "2AR-FXE"],
+    "sienna":     ["2GR-FKS"],
+    "tacoma":     ["2TR-FE", "1GR-FE"],
+    "4runner":    ["1GR-FE"],
+}
 URGENCY_COLOR = {"immediate": "🔴", "soon": "🟠", "monitor": "🟡", "none": "🟢", "unknown": "⚪"}
 
 
@@ -80,9 +91,16 @@ def predict_risk(models: dict, row: dict) -> float:
 def vehicle_sidebar():
     with st.sidebar:
         st.header("Vehicle Information")
-        model  = st.selectbox("Model",       VEHICLE_MODELS, index=1)
-        year   = st.selectbox("Year",        YEARS,          index=4)
-        engine = st.selectbox("Engine Code", ENGINE_CODES)
+        model  = st.selectbox("Model", VEHICLE_MODELS, index=1)
+        year   = st.selectbox("Year",  YEARS,          index=0)
+
+        engine_options = MODEL_ENGINE_MAP.get(model, ["Unknown"])
+        engine = st.selectbox(
+            "Engine Code",
+            engine_options,
+            index=0,
+            help=f"Engine codes available for 2020 {model.title()}",
+        )
         st.divider()
         _show_system_status()
     return model, year, engine
@@ -249,13 +267,38 @@ def symptom_tab(vehicle_model: str, vehicle_year: int, engine_code: str):
 
         with st.spinner("Generating full diagnostic report …"):
             t0     = time.time()
-            chunks = retrieve(
+
+            # Retrieve for all active candidates so the report covers each issue.
+            # Top candidate gets k=5 slots; remaining active candidates share k=2 each.
+            seen_docs: set[str] = set()
+            chunks: list[dict] = []
+
+            def _add_chunks(new_chunks):
+                for c in new_chunks:
+                    if c["document"] not in seen_docs:
+                        seen_docs.add(c["document"])
+                        chunks.append(c)
+
+            _add_chunks(retrieve(
                 dtc_code      = top["dtc_code"],
                 engine_code   = engine_code if engine_code != "Unknown" else "",
                 vehicle_model = vehicle_model,
+                vehicle_year  = vehicle_year,
                 free_text     = symptom_summary,
                 k             = 5,
-            )
+            ))
+            for other in active:
+                if other["dtc_code"] == top["dtc_code"]:
+                    continue
+                _add_chunks(retrieve(
+                    dtc_code      = other["dtc_code"],
+                    engine_code   = engine_code if engine_code != "Unknown" else "",
+                    vehicle_model = vehicle_model,
+                    vehicle_year  = vehicle_year,
+                    k             = 2,
+                ))
+            chunks.sort(key=lambda x: x["combined_score"], reverse=True)
+            chunks = chunks[:10]
             report = generate_report(
                 context_chunks = chunks,
                 vehicle_model  = vehicle_model,
@@ -267,19 +310,70 @@ def symptom_tab(vehicle_model: str, vehicle_year: int, engine_code: str):
             )
             latency = time.time() - t0
 
+        with st.expander(f"📚 Retrieved {len(chunks)} knowledge chunks"):
+            for i, c in enumerate(chunks, 1):
+                year_badge = f" ⚠️ *from {c['model_year']} docs*" if c.get("year_mismatch") and c.get("model_year") else ""
+                st.markdown(
+                    f"**[{i}]** `{c['dtc_code'] or 'N/A'}` — {c['description'] or c['document'][:120]}{year_badge}  \n"
+                    f"*{c['source']}* | Score: {c['combined_score']:.3f}"
+                )
         _render_full_report(report, chunks, latency)
 
 
 # --------------------------------------------------------------------------- #
-# Tab 2 — Sensor data mode (unchanged logic)
+# Tab 2 — Sensor data mode
 # --------------------------------------------------------------------------- #
+
+def _build_sensor_query(rpm: int, coolant: int, maf: float, load: int,
+                        fuel_trim: float, throttle: int, speed: int,
+                        intake: int, risk_score: float) -> str:
+    """
+    Derive a diagnostic free-text query from sensor readings so retrieve()
+    returns relevant chunks even when no DTC code is supplied.
+    Each condition maps to the language Toyota service docs use.
+    """
+    parts: list[str] = []
+
+    # Cooling system
+    if coolant > 105:
+        parts.append("engine overheating high coolant temperature cooling system fan P0217")
+    elif coolant < 60:
+        parts.append("engine not reaching operating temperature thermostat stuck open P0128 coolant temperature below threshold")
+
+    # Fuel trim — lean or rich running
+    if fuel_trim > 10:
+        parts.append("system too lean positive fuel trim P0171 vacuum leak MAF sensor air fuel ratio")
+    elif fuel_trim < -10:
+        parts.append("system too rich negative fuel trim P0172 fuel injector fuel pressure")
+
+    # Idle quality
+    if rpm > 1300 and speed == 0 and load < 20:
+        parts.append("high idle RPM rough idle IAC throttle body P0507")
+    elif rpm < 500 and speed == 0:
+        parts.append("engine stalling low RPM idle P0505 P0300")
+
+    # High load at low speed (dragging / slipping)
+    if load > 80 and speed < 10:
+        parts.append("high engine load low speed transmission brake drag")
+
+    # Generic fallback when risk is elevated but nothing specific stands out
+    if not parts and risk_score > 0.30:
+        parts.append("engine performance diagnostic sensor fault")
+
+    return " ".join(parts)
+
+
 def sensor_tab(vehicle_model: str, vehicle_year: int, engine_code: str):
     models = load_models()
 
     st.subheader("OBD Sensor Readings")
     st.caption("Enter readings from your OBD scanner. Leave at default if unknown.")
 
-    dtc_code = st.text_input("DTC Code (optional)", placeholder="e.g. P0300")
+    dtc_code = st.text_input(
+        "DTC / TSB Code (optional)",
+        placeholder="e.g. P0300  or  T-SB-0009-23",
+        help="Enter a DTC fault code (P0300), a Toyota TSB reference (T-SB-0009-23), or leave blank to use sensor data only.",
+    )
 
     col1, col2, col3 = st.columns(3)
     with col1:
@@ -322,28 +416,73 @@ def sensor_tab(vehicle_model: str, vehicle_year: int, engine_code: str):
         risk_score = predict_risk(models, sensor_row)
         ml_lat     = time.time() - t0
 
+    # Rule-based overrides: ML model may underestimate risk for clearly
+    # out-of-range readings because training data rarely captures extremes.
+    risk_boost  = 0.0
+    sensor_cel  = False
+
+    # Out-of-range sensor overrides
+    if coolant > 105:
+        risk_boost = max(risk_boost, 0.40)   # overheating → high risk
+        sensor_cel = True                     # P0128 / P0217 likely
+    if coolant < 60:
+        risk_boost = max(risk_boost, 0.30)   # thermostat stuck open
+        sensor_cel = True                     # P0128 likely
+    if rpm > 1300 and speed == 0:
+        risk_boost = max(risk_boost, 0.20)   # high idle → P0507
+        sensor_cel = True
+    if abs(fuel_trim) > 15:
+        risk_boost = max(risk_boost, 0.25)   # lean/rich running → P0171/P0172
+        sensor_cel = True
+
+    # DTC presence overrides: a stored DTC means CEL is on; risk reflects severity
+    dtc_clean = dtc_code.strip().upper() if dtc_code else ""
+    if dtc_clean and not dtc_clean.startswith("T-SB"):
+        first_char = dtc_clean[0] if dtc_clean else ""
+        if first_char == "P":
+            # P0xxx generic powertrain — higher severity
+            # P1xxx/P2xxx manufacturer-specific — moderate severity
+            if dtc_clean.startswith("P0"):
+                risk_boost = max(risk_boost, 0.45)
+            else:
+                risk_boost = max(risk_boost, 0.30)
+            sensor_cel = True   # any P-code triggers CEL
+        elif first_char in ("B", "C", "U"):
+            risk_boost = max(risk_boost, 0.15)
+            # B/C/U may or may not trigger CEL; set it on conservatively
+            sensor_cel = True
+
+    risk_score = min(1.0, risk_score + risk_boost)
+    cel_likely  = (risk_score > 0.5) or sensor_cel
+
     urgency = ("immediate" if risk_score > 0.75 else "soon" if risk_score > 0.5
                else "monitor" if risk_score > 0.25 else "none")
     c1, c2, c3 = st.columns(3)
     c1.metric("Failure Risk Score", f"{risk_score:.0%}")
     c1.progress(risk_score)
-    c2.metric("Check Engine Light", "⚠️ Likely ON" if risk_score > 0.5 else "✅ Not expected")
+    c2.metric("Check Engine Light", "⚠️ Likely ON" if cel_likely else "✅ Not expected")
     c3.metric("Urgency", f"{URGENCY_COLOR.get(urgency)} {urgency.title()}")
 
     with st.spinner("Retrieving diagnostic knowledge …"):
-        t1     = time.time()
+        t1          = time.time()
+        sensor_query = _build_sensor_query(
+            rpm, coolant, maf, load, fuel_trim, throttle, speed, intake, risk_score
+        )
         chunks = retrieve(
             dtc_code      = dtc_code.strip().upper() if dtc_code else "",
             engine_code   = engine_code if engine_code != "Unknown" else "",
             vehicle_model = vehicle_model,
+            vehicle_year  = vehicle_year,
+            free_text     = sensor_query,
             k             = 5,
         )
         rag_lat = time.time() - t1
 
     with st.expander(f"📚 Retrieved {len(chunks)} knowledge chunks"):
         for i, c in enumerate(chunks, 1):
+            year_badge = f" ⚠️ *from {c['model_year']} docs*" if c.get("year_mismatch") and c.get("model_year") else ""
             st.markdown(
-                f"**[{i}]** `{c['dtc_code'] or 'N/A'}` — {c['description'] or c['document'][:120]}  \n"
+                f"**[{i}]** `{c['dtc_code'] or 'N/A'}` — {c['description'] or c['document'][:120]}{year_badge}  \n"
                 f"*[{c['source']}]({c['source_url'] or '#'})* | Score: {c['combined_score']:.3f}"
             )
 
@@ -355,6 +494,14 @@ def sensor_tab(vehicle_model: str, vehicle_year: int, engine_code: str):
                 vehicle_year=vehicle_year, engine_code=engine_code,
                 dtc_code=dtc_code.strip().upper() if dtc_code else "",
                 risk_score=risk_score, cel_likely=risk_score > 0.5,
+                sensor_readings={
+                    "coolant_temp_c":    coolant,
+                    "engine_rpm":        rpm,
+                    "fuel_trim_pct":     fuel_trim,
+                    "engine_load_pct":   load,
+                    "maf_gps":           maf,
+                    "vehicle_speed_kmh": speed,
+                },
             )
             llm_lat = time.time() - t2
         except RuntimeError as e:
@@ -362,6 +509,56 @@ def sensor_tab(vehicle_model: str, vehicle_year: int, engine_code: str):
             st.stop()
 
     _render_full_report(report, chunks, ml_lat + rag_lat + llm_lat)
+
+
+# --------------------------------------------------------------------------- #
+# LEMON reference diagram display
+# --------------------------------------------------------------------------- #
+def _render_reference_diagrams(chunks: list[dict]):
+    """
+    Show wiring diagrams / component photos from the LEMON manual database.
+    Only appears when retrieved chunks include LEMON pages that have images.
+    Images are pre-extracted PNG files in Data/lemon/images/ by extract_lemon.py.
+    """
+    # Collect unique image filenames from all retrieved LEMON chunks
+    image_files: list[Path] = []
+    seen: set[str] = set()
+
+    for chunk in chunks:
+        if chunk.get("source") != "LEMON Vehicle Manual Database":
+            continue
+        raw_keys = chunk.get("image_keys", "")
+        if not raw_keys:
+            continue
+        for fname in raw_keys.split(","):
+            fname = fname.strip()
+            if not fname or fname in seen:
+                continue
+            img_path = LEMON_IMGS / fname
+            if img_path.exists():
+                image_files.append(img_path)
+                seen.add(fname)
+
+    if not image_files:
+        return   # no LEMON images — skip expander entirely
+
+    with st.expander(f"📷 Reference Diagrams ({len(image_files)} image{'s' if len(image_files) != 1 else ''} from LEMON manuals)"):
+        st.caption("Wiring diagrams and component photos from the vehicle service manual.")
+        # Display in rows of 3
+        cols_per_row = 3
+        for row_start in range(0, len(image_files), cols_per_row):
+            row_imgs = image_files[row_start : row_start + cols_per_row]
+            cols = st.columns(len(row_imgs))
+            for col, img_path in zip(cols, row_imgs):
+                with col:
+                    try:
+                        st.image(
+                            str(img_path),
+                            caption=img_path.stem,
+                            use_column_width=True,
+                        )
+                    except Exception:
+                        st.caption(f"⚠️ Could not load {img_path.name}")
 
 
 # --------------------------------------------------------------------------- #
@@ -392,13 +589,24 @@ def _render_full_report(report: dict, chunks: list[dict], latency: float):
             st.markdown(f"- {action}")
 
     st.divider()
-    ca, cb, cc, cd = st.columns(4)
+    urgency_val = report.get("urgency", "unknown")
+    urgency_label = f"{URGENCY_COLOR.get(urgency_val, '⚪')} {urgency_val.title()}"
+    ca, cb, cc, cd, ce = st.columns(5)
     ca.metric("Faithfulness",   f"{faith:.0%}")
     cb.metric("LLM Confidence", f"{report.get('confidence', 0.0):.0%}")
-    cc.metric("LLM Used",       report.get("llm_used", "—").upper())
-    cd.metric("Latency",        f"{latency:.1f}s")
+    cc.metric("Urgency",        urgency_label)
+    cd.metric("LLM Used",       report.get("llm_used", "—").upper())
+    ce.metric("Latency",        f"{latency:.1f}s")
 
     with st.expander("🔗 Source Traceability"):
+        year_mismatches = [c for c in chunks if c.get("year_mismatch") and c.get("model_year")]
+        if year_mismatches:
+            mismatch_years = sorted(set(str(c["model_year"]) for c in year_mismatches))
+            st.info(
+                f"ℹ️ {len(year_mismatches)} source chunk(s) are from "
+                f"{', '.join(mismatch_years)} documentation — no exact match found for your "
+                "vehicle year. The information may still apply; verify with a Toyota technician."
+            )
         refs = report.get("source_refs", [])
         sources = refs if refs else [
             f"[{c['source']}]({c['source_url']})" for c in chunks if c.get("source_url")
@@ -408,6 +616,9 @@ def _render_full_report(report: dict, chunks: list[dict], latency: float):
 
     with st.expander("🛠️ Raw JSON Report"):
         st.json({k: v for k, v in report.items() if k != "raw_text"})
+
+    # ── Reference Diagrams (LEMON images) ─────────────────────────────────── #
+    _render_reference_diagrams(chunks)
 
     st.caption(
         "⚠️ **Disclaimer:** For educational and diagnostic assistance only. "
